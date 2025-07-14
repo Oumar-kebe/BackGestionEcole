@@ -2,44 +2,108 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
+use Tymon\JWTAuth\Contracts\JWTSubject;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
-class User extends Authenticatable
+class User extends Authenticatable implements JWTSubject
 {
-    use HasApiTokens, HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, Notifiable, SoftDeletes;
 
-    /**
-     * The attributes that are mass assignable.
-     *
-     * @var array<int, string>
-     */
     protected $fillable = [
         'name',
         'email',
         'password',
+        'nom',
+        'prenom',
+        'role',
+        'telephone',
+        'adresse',
+        'date_naissance',
+        'lieu_naissance',
+        'sexe',
+        'matricule',
+        'actif'
     ];
 
-    /**
-     * The attributes that should be hidden for serialization.
-     *
-     * @var array<int, string>
-     */
     protected $hidden = [
         'password',
         'remember_token',
     ];
 
-    /**
-     * The attributes that should be cast.
-     *
-     * @var array<string, string>
-     */
     protected $casts = [
         'email_verified_at' => 'datetime',
-        'password' => 'hashed',
+        'date_naissance' => 'date',
+        'actif' => 'boolean',
     ];
+
+    public function getJWTIdentifier()
+    {
+        return $this->getKey();
+    }
+
+    public function getJWTCustomClaims()
+    {
+        return [
+            'role' => $this->role,
+            'matricule' => $this->matricule,
+        ];
+    }
+
+    // Relations
+    public function eleve()
+    {
+        return $this->hasOne(Eleve::class);
+    }
+
+    public function enseignant()
+    {
+        return $this->hasOne(Enseignant::class);
+    }
+
+    public function parent()
+    {
+        return $this->hasOne(ParentEleve::class);
+    }
+
+    // Scopes
+    public function scopeActif($query)
+    {
+        return $query->where('actif', true);
+    }
+
+    public function scopeRole($query, $role)
+    {
+        return $query->where('role', $role);
+    }
+
+    // Helpers
+    public function isAdmin()
+    {
+        return $this->role === 'administrateur';
+    }
+
+    public function isEnseignant()
+    {
+        return $this->role === 'enseignant';
+    }
+
+    public function isEleve()
+    {
+        return $this->role === 'eleve';
+    }
+
+    public function isParent()
+    {
+        return $this->role === 'parent';
+    }
+
+    public function getNomCompletAttribute()
+    {
+        return $this->prenom . ' ' . $this->nom;
+    }
 }
