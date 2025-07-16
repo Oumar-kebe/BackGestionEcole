@@ -12,7 +12,10 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        // $schedule->command('inspire')->hourly();
+        // Envoyer les récapitulatifs tous les vendredis à 18h
+        $schedule->command('email:recapitulatif-hebdomadaire')
+            ->fridays()
+            ->at('18:00');
     }
 
     /**
