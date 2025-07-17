@@ -29,7 +29,9 @@ Route::prefix('auth')->group(function () {
     Route::post('login', [AuthController::class, 'login']);
     Route::post('register', [AuthController::class, 'register']);
 
+
     Route::middleware('jwt.auth')->group(function () {
+
         Route::post('logout', [AuthController::class, 'logout']);
         Route::post('refresh', [AuthController::class, 'refresh']);
         Route::get('me', [AuthController::class, 'me']);
@@ -181,3 +183,20 @@ Route::get('/test', function () {
         'version' => '1.0'
     ]);
 });
+
+// Route de test JWT
+Route::get('/test-jwt', function () {
+    try {
+        $user = auth('api')->user();
+        return response()->json([
+            'success' => true,
+            'message' => 'JWT fonctionne!',
+            'user' => $user ? $user->only(['id', 'name', 'email', 'role']) : null
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur JWT: ' . $e->getMessage()
+        ], 401);
+    }
+})->middleware('jwt.auth');
