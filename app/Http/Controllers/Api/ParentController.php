@@ -101,29 +101,166 @@ class ParentController extends Controller
         ]);
     }
 
-    public function bulletinsEnfants($id)
+    public function voirBulletin($eleveId, $trimestreId)
     {
-        $parent = ParentEleve::findOrFail($id);
-
-        $bulletins = [];
-
-        foreach ($parent->enfants as $enfant) {
-            $bulletinsEnfant = $enfant->bulletins()
-                ->with(['periode', 'classe.niveau'])
-                ->orderBy('created_at', 'desc')
-                ->get();
-
-            $bulletins[] = [
-                'eleve' => $enfant->user,
-                'bulletins' => $bulletinsEnfant
-            ];
+        $user = auth()->user();
+        
+        // Vérifier que l'utilisateur est bien un parent
+        if (!$user->isParent()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Accès non autorisé. Vous devez être un parent.'
+            ], 403);
         }
 
+        // Récupérer l'enregistrement parent
+        $parent = $user->parent; // Utiliser la bonne relation
+        
+        if (!$parent) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Aucun profil parent trouvé pour cet utilisateur.'
+            ], 404);
+        }
+    
+        $estSonEnfant = $parent->enfants()->where('eleves.id', $eleveId)->exists();
+    
+        if (!$estSonEnfant) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cet enfant ne vous appartient pas.'
+            ], 403);
+        }
+    
+        $bulletin = \App\Models\Bulletin::where('eleve_id', $eleveId)
+            ->where('periode_id', $trimestreId)
+            ->with(['classe.niveau', 'periode', 'eleve.user'])
+            ->first();
+    
+        if (!$bulletin) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Aucun bulletin trouvé pour cet élève et ce trimestre.'
+            ], 404);
+        }
+
+        // Récupérer les notes détaillées de l'élève pour cette période ET cette classe seulement
+        $notes = \App\Models\Note::where('eleve_id', $eleveId)
+            ->where('periode_id', $trimestreId)
+            ->whereHas('matiere', function($query) use ($bulletin) {
+                $query->where('niveau_id', $bulletin->classe->niveau_id);
+            })
+            ->with([
+                'matiere:id,nom,code,coefficient,niveau_id',
+                'enseignant.user:id,nom,prenom'
+            ])
+            ->get()
+            ->map(function ($note) use ($trimestreId, $bulletin) {
+                return [
+                    'matiere_nom' => $note->matiere->nom,
+                    'matiere_code' => $note->matiere->code,
+                    'matiere_couleur' => '#3B82F6', // Couleur par défaut
+                    'coefficient' => $note->matiere->coefficient,
+                    'enseignant_nom' => $note->enseignant ? 
+                        trim($note->enseignant->user->prenom . ' ' . $note->enseignant->user->nom) : 
+                        'Non assigné',
+                    'note_devoir1' => $note->note_devoir1,
+                    'note_devoir2' => $note->note_devoir2,
+                    'note_composition' => $note->note_composition,
+                    'moyenne' => $note->moyenne,
+                    'appreciation' => $note->appreciation,
+                    'moyenne_classe' => $this->getMoyenneClasse($note->matiere_id, $trimestreId, $bulletin->classe_id)
+                ];
+            });
+
+        // Enrichir les données du bulletin
+        $bulletinData = $bulletin->toArray();
+        $bulletinData['notes'] = $notes;
+        $bulletinData['trimestre'] = $bulletin->periode->nom ?? 'Trimestre ' . $trimestreId;
+        $bulletinData['appreciation_generale'] = $bulletin->observation_conseil;
+        $bulletinData['professeur_principal'] = $this->getProfesseurPrincipal($bulletin->classe_id);
+        $bulletinData['conseils'] = $this->getConseils($bulletin->moyenne_generale);
+        $bulletinData['evolution'] = $this->getEvolution($eleveId, $trimestreId);
+    
         return response()->json([
             'success' => true,
-            'data' => $bulletins
+            'data' => $bulletinData
         ]);
     }
+
+    private function getMoyenneClasse($matiereId, $periodeId, $classeId)
+    {
+        // Calculer la moyenne de la classe pour une matière donnée
+        $moyenneClasse = \App\Models\Note::whereHas('eleve.inscriptions', function($q) use ($classeId) {
+                $q->where('classe_id', $classeId)
+                  ->where('statut', 'confirmee');
+            })
+            ->where('matiere_id', $matiereId)
+            ->where('periode_id', $periodeId)
+            ->whereNotNull('moyenne')
+            ->avg('moyenne');
+
+        return $moyenneClasse ? round($moyenneClasse, 2) : null;
+    }
+
+    private function getProfesseurPrincipal($classeId)
+    {
+        // Récupérer le professeur principal de la classe
+        $classe = \App\Models\Classe::with(['enseignants.user'])
+            ->find($classeId);
+        
+        if ($classe && $classe->enseignants->isNotEmpty()) {
+            $principal = $classe->enseignants->first();
+            return trim($principal->user->prenom . ' ' . $principal->user->nom);
+        }
+
+        return 'Non assigné';
+    }
+
+    private function getConseils($moyenne)
+    {
+        // Générer des conseils basés sur la moyenne
+        if ($moyenne >= 15) {
+            return "Excellent travail ! Continuez sur cette lancée.";
+        } elseif ($moyenne >= 12) {
+            return "Bon travail, quelques efforts supplémentaires vous permettront d'atteindre l'excellence.";
+        } elseif ($moyenne >= 10) {
+            return "Travail satisfaisant, mais des améliorations sont possibles dans certaines matières.";
+        } else {
+            return "Des efforts considérables sont nécessaires pour améliorer les résultats.";
+        }
+    }
+
+    private function getEvolution($eleveId, $periodeId)
+    {
+        // Calculer l'évolution par rapport à la période précédente
+        $periodeActuelle = \App\Models\Periode::find($periodeId);
+        if (!$periodeActuelle) return 0;
+
+        // Trouver la période précédente
+        $periodePrecedente = \App\Models\Periode::where('annee_scolaire_id', $periodeActuelle->annee_scolaire_id)
+            ->where('ordre', $periodeActuelle->ordre - 1)
+            ->first();
+
+        if (!$periodePrecedente) return 0;
+
+        $bulletinActuel = \App\Models\Bulletin::where('eleve_id', $eleveId)
+            ->where('periode_id', $periodeId)
+            ->first();
+
+        $bulletinPrecedent = \App\Models\Bulletin::where('eleve_id', $eleveId)
+            ->where('periode_id', $periodePrecedente->id)
+            ->first();
+
+        if ($bulletinActuel && $bulletinPrecedent) {
+            return round($bulletinActuel->moyenne_generale - $bulletinPrecedent->moyenne_generale, 2);
+        }
+
+        return 0;
+    }
+    
+    
+    
 
     public function update(Request $request, $id)
     {
@@ -176,7 +313,23 @@ class ParentController extends Controller
     public function mesEnfants()
     {
         $user = auth()->user();
-        $parent = ParentEleve::where('user_id', $user->id)->firstOrFail();
+        
+        // Vérifier que l'utilisateur est bien un parent
+        if (!$user->isParent()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Accès non autorisé. Vous devez être un parent.'
+            ], 403);
+        }
+
+        $parent = $user->parent; // Utiliser la bonne relation
+        
+        if (!$parent) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Aucun profil parent trouvé pour cet utilisateur.'
+            ], 404);
+        }
 
         $enfants = $parent->enfants()
             ->with(['user', 'inscriptions.classe.niveau'])
@@ -191,7 +344,23 @@ class ParentController extends Controller
     public function bulletinEnfant($eleveId)
     {
         $user = auth()->user();
-        $parent = ParentEleve::where('user_id', $user->id)->firstOrFail();
+        
+        // Vérifier que l'utilisateur est bien un parent
+        if (!$user->isParent()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Accès non autorisé. Vous devez être un parent.'
+            ], 403);
+        }
+
+        $parent = $user->parent; // Utiliser la bonne relation
+        
+        if (!$parent) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Aucun profil parent trouvé pour cet utilisateur.'
+            ], 404);
+        }
 
         // Vérifier que l'élève est bien un enfant du parent
         if (!$parent->peutVoirEleve($eleveId)) {

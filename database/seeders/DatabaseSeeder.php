@@ -29,6 +29,13 @@ class DatabaseSeeder extends Seeder
             EnseignantSeeder::class,
             EleveSeeder::class,
             PeriodeSeeder::class,
+            EmploiTempsSeeder::class,
+            
+            // 5. Génération des notes (doit être avant les bulletins)
+            NoteSeeder::class,
+            
+            // 6. Génération des bulletins (doit être après les notes)
+            BulletinSeeder::class,
         ]);
     }
 }

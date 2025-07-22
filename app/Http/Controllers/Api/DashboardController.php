@@ -311,36 +311,343 @@ class DashboardController extends Controller
         return 'stable';
     }
 
-    public function statistiquesParent()
+    public function statistiquesGenerales()
     {
-        $user = auth()->user();
-        $parent = \App\Models\ParentEleve::where('user_id', $user->id)->firstOrFail();
+        $anneeCourante = AnneeScolaire::where('actuelle', true)->first();
 
         $stats = [
-            'nombre_enfants' => $parent->enfants()->count(),
-            'enfants' => $parent->enfants()
-                ->with(['user', 'inscriptions.classe.niveau'])
-                ->get()
-                ->map(function($enfant) {
-                    $inscription = $enfant->inscriptions()
-                        ->where('statut', 'en_cours')
-                        ->first();
-
-                    return [
-                        'nom' => $enfant->user->nom_complet,
-                        'matricule' => $enfant->user->matricule,
-                        'classe' => $inscription?->classe?->nom,
-                        'niveau' => $inscription?->classe?->niveau?->nom,
-                        'dernier_bulletin' => $enfant->bulletins()
-                            ->orderBy('created_at', 'desc')
-                            ->first(),
-                    ];
-                }),
+            // Statistiques académiques globales
+            'academicStats' => $this->getAcademicStats($anneeCourante),
+            
+            // Moyennes générales par classe
+            'classAverages' => $this->getClassAverages($anneeCourante),
+            
+            // Statistiques des notes saisies
+            'gradeStats' => $this->getGradeStats($anneeCourante),
+            
+            // Activité récente détaillée
+            'recentActivity' => $this->getDetailedRecentActivity(),
+            
+            // Alertes et notifications
+            'activeAlerts' => $this->getActiveAlerts($anneeCourante),
+            
+            // Nouvelles inscriptions
+            'newEnrollments' => $this->getNewEnrollments($anneeCourante),
+            
+            // Bulletins générés
+            'reportsGenerated' => $this->getGeneratedReports($anneeCourante),
         ];
 
         return response()->json([
             'success' => true,
             'data' => $stats
         ]);
+    }
+
+    protected function getAcademicStats($anneeCourante)
+    {
+        if (!$anneeCourante) {
+            return [
+                'averageGeneral' => 'N/A',
+                'successRate' => 0,
+                'strugglingStudents' => 0,
+                'newEnrollments' => 0,
+                'reportsGenerated' => 0,
+                'activeAlerts' => 0
+            ];
+        }
+
+        // Moyenne générale de l'école
+        $moyenneGenerale = DB::table('notes')
+            ->join('inscriptions', 'notes.eleve_id', '=', 'inscriptions.eleve_id')
+            ->where('inscriptions.annee_scolaire_id', $anneeCourante->id)
+            ->where('inscriptions.statut', 'en_cours')
+            ->avg('notes.note');
+
+        // Taux de réussite (élèves avec moyenne >= 10)
+        $totalEleves = Inscription::where('annee_scolaire_id', $anneeCourante->id)
+            ->where('statut', 'en_cours')
+            ->count();
+
+        $elevesReussit = DB::table('notes')
+            ->join('inscriptions', 'notes.eleve_id', '=', 'inscriptions.eleve_id')
+            ->where('inscriptions.annee_scolaire_id', $anneeCourante->id)
+            ->where('inscriptions.statut', 'en_cours')
+            ->select('notes.eleve_id', DB::raw('AVG(notes.note) as moyenne'))
+            ->groupBy('notes.eleve_id')
+            ->havingRaw('AVG(notes.note) >= 10')
+            ->count();
+
+        $tauxReussite = $totalEleves > 0 ? round(($elevesReussit / $totalEleves) * 100, 2) : 0;
+
+        // Élèves en difficulté (moyenne < 8)
+        $elevesEnDifficulte = DB::table('notes')
+            ->join('inscriptions', 'notes.eleve_id', '=', 'inscriptions.eleve_id')
+            ->where('inscriptions.annee_scolaire_id', $anneeCourante->id)
+            ->where('inscriptions.statut', 'en_cours')
+            ->select('notes.eleve_id', DB::raw('AVG(notes.note) as moyenne'))
+            ->groupBy('notes.eleve_id')
+            ->havingRaw('AVG(notes.note) < 8')
+            ->count();
+
+        return [
+            'averageGeneral' => $moyenneGenerale ? round($moyenneGenerale, 2) : 'N/A',
+            'successRate' => $tauxReussite,
+            'strugglingStudents' => $elevesEnDifficulte,
+            'newEnrollments' => $this->getNewEnrollmentsCount($anneeCourante),
+            'reportsGenerated' => $this->getGeneratedReportsCount($anneeCourante),
+            'activeAlerts' => $this->getActiveAlertsCount($anneeCourante)
+        ];
+    }
+
+    protected function getClassAverages($anneeCourante)
+    {
+        if (!$anneeCourante) {
+            return [];
+        }
+
+        $classes = Classe::where('annee_scolaire_id', $anneeCourante->id)
+            ->where('actif', true)
+            ->with(['niveau', 'inscriptions' => function($q) {
+                $q->where('statut', 'en_cours');
+            }])
+            ->get();
+
+        return $classes->map(function($classe) {
+            // Calculer la moyenne de la classe
+            $moyenneClasse = DB::table('notes')
+                ->join('inscriptions', 'notes.eleve_id', '=', 'inscriptions.eleve_id')
+                ->where('inscriptions.classe_id', $classe->id)
+                ->where('inscriptions.statut', 'en_cours')
+                ->avg('notes.note');
+
+            // Calculer l'évolution (comparaison avec le trimestre précédent)
+            $evolution = $this->getClassEvolution($classe->id);
+
+            return [
+                'nom' => $classe->nom,
+                'niveau' => $classe->niveau->nom,
+                'effectif' => $classe->inscriptions->count(),
+                'moyenne' => $moyenneClasse ? round($moyenneClasse, 2) : null,
+                'evolution' => $evolution
+            ];
+        })->toArray();
+    }
+
+    protected function getClassEvolution($classeId)
+    {
+        // Simplification : retourner une évolution simulée
+        // Dans un vrai projet, on comparerait avec la période précédente
+        $periodes = \App\Models\Periode::orderBy('ordre', 'desc')->limit(2)->get();
+        
+        if ($periodes->count() < 2) {
+            return 0;
+        }
+
+        $currentPeriode = $periodes->first();
+        $previousPeriode = $periodes->last();
+
+        $currentAverage = DB::table('notes')
+            ->join('inscriptions', 'notes.eleve_id', '=', 'inscriptions.eleve_id')
+            ->where('inscriptions.classe_id', $classeId)
+            ->where('notes.periode_id', $currentPeriode->id)
+            ->avg('notes.note');
+
+        $previousAverage = DB::table('notes')
+            ->join('inscriptions', 'notes.eleve_id', '=', 'inscriptions.eleve_id')
+            ->where('inscriptions.classe_id', $classeId)
+            ->where('notes.periode_id', $previousPeriode->id)
+            ->avg('notes.note');
+
+        if (!$currentAverage || !$previousAverage) {
+            return 0;
+        }
+
+        return round($currentAverage - $previousAverage, 2);
+    }
+
+    protected function getGradeStats($anneeCourante)
+    {
+        if (!$anneeCourante) {
+            return [
+                'today' => 0,
+                'thisWeek' => 0,
+                'thisMonth' => 0
+            ];
+        }
+
+        return [
+            'today' => Note::whereDate('created_at', today())->count(),
+            'thisWeek' => Note::where('created_at', '>=', now()->subWeek())->count(),
+            'thisMonth' => Note::where('created_at', '>=', now()->subMonth())->count(),
+        ];
+    }
+
+    protected function getDetailedRecentActivity()
+    {
+        $activites = [];
+
+        // Dernières notes saisies (plus détaillées)
+        $dernieresNotes = Note::with(['eleve.user', 'matiere', 'enseignant.user', 'periode'])
+            ->orderBy('created_at', 'desc')
+            ->limit(8)
+            ->get();
+
+        foreach ($dernieresNotes as $note) {
+            $activites[] = [
+                'type' => 'note',
+                'icon' => '📝',
+                'title' => "Note saisie en {$note->matiere->nom}",
+                'description' => "Note de {$note->note}/20 pour {$note->eleve->user->nom_complet}",
+                'author' => $note->enseignant->user->nom_complet,
+                'date' => $note->created_at,
+                'periode' => $note->periode->nom ?? 'N/A'
+            ];
+        }
+
+        // Derniers bulletins générés
+        $derniersBulletins = Bulletin::with(['eleve.user', 'periode'])
+            ->whereNotNull('genere_le')
+            ->orderBy('genere_le', 'desc')
+            ->limit(5)
+            ->get();
+
+        foreach ($derniersBulletins as $bulletin) {
+            $activites[] = [
+                'type' => 'bulletin',
+                'icon' => '📋',
+                'title' => "Bulletin généré",
+                'description' => "{$bulletin->eleve->user->nom_complet} - {$bulletin->periode->nom}",
+                'author' => 'Système',
+                'date' => $bulletin->genere_le,
+                'moyenne' => $bulletin->moyenne_generale ?? 'N/A'
+            ];
+        }
+
+        // Nouvelles inscriptions
+        $nouvellesInscriptions = Inscription::with(['eleve.user', 'classe'])
+            ->where('created_at', '>=', now()->subDays(7))
+            ->orderBy('created_at', 'desc')
+            ->limit(5)
+            ->get();
+
+        foreach ($nouvellesInscriptions as $inscription) {
+            $activites[] = [
+                'type' => 'inscription',
+                'icon' => '👤',
+                'title' => "Nouvelle inscription",
+                'description' => "{$inscription->eleve->user->nom_complet} en {$inscription->classe->nom}",
+                'author' => 'Administration',
+                'date' => $inscription->created_at,
+                'classe' => $inscription->classe->nom
+            ];
+        }
+
+        // Trier par date
+        usort($activites, function($a, $b) {
+            return $b['date']->timestamp - $a['date']->timestamp;
+        });
+
+        return array_slice($activites, 0, 15);
+    }
+
+    protected function getActiveAlerts($anneeCourante)
+    {
+        // Alertes pour élèves en difficulté, classes avec faible moyenne, etc.
+        $alerts = [];
+
+        if (!$anneeCourante) {
+            return $alerts;
+        }
+
+        // Élèves avec moyenne très faible
+        $elevesEnDanger = DB::table('notes')
+            ->join('inscriptions', 'notes.eleve_id', '=', 'inscriptions.eleve_id')
+            ->join('eleves', 'notes.eleve_id', '=', 'eleves.id')
+            ->join('users', 'eleves.user_id', '=', 'users.id')
+            ->where('inscriptions.annee_scolaire_id', $anneeCourante->id)
+            ->where('inscriptions.statut', 'en_cours')
+            ->select('users.nom_complet', 'notes.eleve_id', DB::raw('AVG(notes.note) as moyenne'))
+            ->groupBy('notes.eleve_id', 'users.nom_complet')
+            ->havingRaw('AVG(notes.note) < 5')
+            ->get();
+
+        foreach ($elevesEnDanger as $eleve) {
+            $alerts[] = [
+                'type' => 'critical',
+                'title' => 'Élève en danger',
+                'message' => "{$eleve->nom_complet} a une moyenne de {$eleve->moyenne}/20",
+                'action' => 'Intervention urgente recommandée'
+            ];
+        }
+
+        return $alerts;
+    }
+
+    protected function getActiveAlertsCount($anneeCourante)
+    {
+        if (!$anneeCourante) {
+            return 0;
+        }
+
+        // Compter les élèves avec moyenne < 5
+        $elevesEnDanger = DB::table('notes')
+            ->join('inscriptions', 'notes.eleve_id', '=', 'inscriptions.eleve_id')
+            ->where('inscriptions.annee_scolaire_id', $anneeCourante->id)
+            ->where('inscriptions.statut', 'en_cours')
+            ->select('notes.eleve_id', DB::raw('AVG(notes.note) as moyenne'))
+            ->groupBy('notes.eleve_id')
+            ->havingRaw('AVG(notes.note) < 5')
+            ->count();
+
+        return $elevesEnDanger;
+    }
+
+    protected function getNewEnrollmentsCount($anneeCourante)
+    {
+        if (!$anneeCourante) {
+            return 0;
+        }
+
+        return Inscription::where('annee_scolaire_id', $anneeCourante->id)
+            ->where('created_at', '>=', now()->subMonth())
+            ->count();
+    }
+
+    protected function getGeneratedReportsCount($anneeCourante)
+    {
+        if (!$anneeCourante) {
+            return 0;
+        }
+
+        return Bulletin::join('inscriptions', 'bulletins.eleve_id', '=', 'inscriptions.eleve_id')
+            ->where('inscriptions.annee_scolaire_id', $anneeCourante->id)
+            ->whereNotNull('bulletins.genere_le')
+            ->where('bulletins.created_at', '>=', now()->subMonth())
+            ->count();
+    }
+
+    protected function getNewEnrollments($anneeCourante)
+    {
+        if (!$anneeCourante) {
+            return 0;
+        }
+
+        return Inscription::where('annee_scolaire_id', $anneeCourante->id)
+            ->where('created_at', '>=', now()->subWeek())
+            ->count();
+    }
+
+    protected function getGeneratedReports($anneeCourante)
+    {
+        if (!$anneeCourante) {
+            return 0;
+        }
+
+        return Bulletin::join('inscriptions', 'bulletins.eleve_id', '=', 'inscriptions.eleve_id')
+            ->where('inscriptions.annee_scolaire_id', $anneeCourante->id)
+            ->whereNotNull('bulletins.genere_le')
+            ->where('bulletins.created_at', '>=', now()->subWeek())
+            ->count();
     }
 }

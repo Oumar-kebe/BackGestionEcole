@@ -10,7 +10,7 @@ class MatiereController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Matiere::with('niveau');
+        $query = Matiere::with('niveau','enseignants.user');
 
         if ($request->has('niveau_id')) {
             $query->where('niveau_id', $request->niveau_id);

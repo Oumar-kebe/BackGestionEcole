@@ -17,6 +17,8 @@ use App\Http\Controllers\Api\BulletinController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\PeriodeController;
+use App\Http\Controllers\Api\EmploiTempsController;
+use App\Http\Controllers\Api\DebugController;
 
 /*
 |--------------------------------------------------------------------------
@@ -45,6 +47,10 @@ Route::middleware(['jwt.auth', 'active'])->group(function () {
     // Routes accessibles à tous les utilisateurs connectés
     Route::get('dashboard/mon-tableau-bord', [DashboardController::class, 'monTableauBord']);
     Route::get('profil', [AuthController::class, 'me']);
+
+    // Routes de debug (temporaires)
+    Route::get('debug/user-info', [DebugController::class, 'userInfo']);
+    Route::get('debug/parent-enfants', [DebugController::class, 'parentEnfants']);
 
     // Routes pour l'administrateur uniquement
     Route::middleware(['role:administrateur'])->group(function () {
@@ -105,8 +111,18 @@ Route::middleware(['jwt.auth', 'active'])->group(function () {
         Route::post('periodes/{periode}/set-actuelle', [PeriodeController::class, 'setActuelle']);
         Route::get('periodes/{periode}/statistiques', [PeriodeController::class, 'statistiques']);
 
+        // Gestion des emplois du temps
+        Route::apiResource('emploi-temps', EmploiTempsController::class);
+        Route::get('emploi-temps-semaine', [EmploiTempsController::class, 'emploiSemaine']);
+
+        // Gestion des emplois du temps
+        Route::apiResource('emploi-temps', EmploiTempsController::class);
+        Route::get('emploi-temps-semaine', [EmploiTempsController::class, 'emploiSemaine']);
+
         // Génération des bulletins
         Route::post('bulletins/generer', [BulletinController::class, 'generer']);
+        // Route::apiResource('admin/bulletins', BulletinController::class);
+
         Route::post('bulletins/{bulletin}/observation-conseil', [BulletinController::class, 'observationConseil']);
         Route::get('bulletins/telecharger-groupe', [BulletinController::class, 'telechargerGroupe']);
 
@@ -121,6 +137,9 @@ Route::middleware(['jwt.auth', 'active'])->group(function () {
     Route::middleware(['role:enseignant'])->group(function () {
         // Mes classes et matières
         Route::get('enseignant/mes-classes', [EnseignantController::class, 'mesClasses']);
+
+        // Mon emploi du temps
+        Route::get('enseignant/mon-emploi-temps', [EmploiTempsController::class, 'emploiSemaine']);
 
         // Saisie des notes
         Route::post('notes', [NoteController::class, 'store']);
@@ -139,6 +158,9 @@ Route::middleware(['jwt.auth', 'active'])->group(function () {
         Route::get('eleve/mes-notes', [NoteController::class, 'mesNotes']);
         Route::get('eleve/mes-bulletins', [BulletinController::class, 'mesBulletins']);
 
+        // Mon emploi du temps
+        Route::get('eleve/mon-emploi-temps', [EmploiTempsController::class, 'emploiSemaine']);
+
         // Dashboard élève
         Route::get('dashboard/statistiques-eleve', [DashboardController::class, 'statistiquesEleve']);
     });
@@ -147,9 +169,15 @@ Route::middleware(['jwt.auth', 'active'])->group(function () {
     Route::middleware(['role:parent'])->group(function () {
         // Mes enfants
         Route::get('parent/mes-enfants', [ParentController::class, 'mesEnfants']);
-        Route::get('parent/enfant/{eleve}/bulletin', [ParentController::class, 'bulletinEnfant'])
-            ->middleware('parent.access');
+        Route::get('parent/eleve/{eleveId}/bulletin/{trimestreId}', [ParentController::class, 'voirBulletin']);
+
+        // Route::get('parent/eleve_id/{eleve_id}/bulletin', [ParentController::class, 'voirBulletin']);
+            // ->middleware('parent.access');
         Route::get('parent/enfant/{eleve}/notes', [NoteController::class, 'notesEleve'])
+            ->middleware('parent.access');
+
+        // Emploi du temps de mes enfants
+        Route::get('parent/enfant/{eleve}/emploi-temps', [EmploiTempsController::class, 'emploiSemaine'])
             ->middleware('parent.access');
 
         // Dashboard parent

@@ -20,7 +20,7 @@ class EleveSeeder extends Seeder
         $classes = Classe::where('annee_scolaire_id', $anneeCourante->id)->get();
 
         $prenomsMasculins = ['Moussa', 'Ibrahima', 'Amadou', 'Cheikh','Mouhamed' ,'Omar', 'Aliou', 'Babacar'];
-        $prenomsFeminins = ['Fatou', 'Aminata', 'Mariama', 'Aissatou', 'Khady', 'Ndèye', 'Mame', 'Rokhaya'];
+        $prenomsFeminins = ['Fatou', 'Aminata', 'Mariama', 'Aissatou', 'Khady', 'Ndèye', 'Mame', 'Aisha'];
         $noms = ['Ndiaye', 'Fall', 'Diop', 'Sow', 'Ba', 'Diallo', 'Sarr', 'Gueye', 'Seck', 'Faye'];
 
         foreach ($classes as $classe) {

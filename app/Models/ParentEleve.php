@@ -36,4 +36,9 @@ class ParentEleve extends Model
     {
         return $this->enfants()->where('eleves.id', $eleveId)->exists();
     }
+
+    public function bulletinsEnfants()
+{
+    return Bulletin::whereIn('eleve_id', $this->enfants->pluck('id'))->get();
+}
 }
