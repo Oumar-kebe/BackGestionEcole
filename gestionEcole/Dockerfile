@@ -1,70 +1,23 @@
-FROM php:8.2-fpm
+FROM php:8.2-cli
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    libpng-dev \
-    libonig-dev \
-    libxml2-dev \
-    zip \
-    unzip \
-    libpq-dev \
-    nginx \
-    supervisor \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libpq-dev zip unzip git curl
 
-# Install PHP extensions
-RUN docker-php-ext-install pdo pdo_pgsql mbstring exif pcntl bcmath gd
+RUN docker-php-ext-install pdo pdo_pgsql
 
-# Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Create app directory
-WORKDIR /var/www/html
+WORKDIR /app
 
-# Copy existing application directory permissions
-COPY . /var/www/html
+COPY . .
 
-# Install dependencies
-RUN composer install --no-dev --optimize-autoloader --no-interaction
+RUN composer install --optimize-autoloader --no-dev
 
-# Set permissions
-RUN chown -R www-data:www-data /var/www/html \
-    && chmod -R 755 /var/www/html/storage \
-    && chmod -R 755 /var/www/html/bootstrap/cache
+RUN chmod -R 755 storage bootstrap/cache
 
-# Create nginx config
-RUN echo 'server { \
-    listen 8080; \
-    index index.php index.html; \
-    root /var/www/html/public; \
-    location / { \
-        try_files $uri $uri/ /index.php?$query_string; \
-    } \
-    location ~ \.php$ { \
-        fastcgi_pass 127.0.0.1:9000; \
-        fastcgi_index index.php; \
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name; \
-        include fastcgi_params; \
-    } \
-}' > /etc/nginx/sites-available/default
+RUN php artisan config:cache || echo "Config cache failed"
 
-# Create supervisord config
-RUN echo '[supervisord] \
-nodaemon=true \
-[program:php-fpm] \
-command=php-fpm \
-autostart=true \
-autorestart=true \
-[program:nginx] \
-command=nginx -g "daemon off;" \
-autostart=true \
-autorestart=true' > /etc/supervisor/conf.d/supervisord.conf
+RUN php artisan route:cache || echo "Route cache failed"
 
-# Expose port
-EXPOSE 8080
+EXPOSE 8000
 
-# Start supervisord
-CMD ["/usr/bin/supervisord"]
+CMD php artisan serve --host=0.0.0.0 --port=$PORT
