@@ -29,12 +29,12 @@ class EleveController extends Controller
     {
         $query = Eleve::with(['user', 'inscriptions.classe.niveau','parents.user']);
 
-        if ($request->has('classe_id')) {
-            $query->whereHas('inscriptions', function($q) use ($request) {
-                $q->where('classe_id', $request->classe_id)
-                    ->where('statut', 'en_cours');
-            });
-        }
+        // if ($request->has('classe_id')) {
+        //     $query->whereHas('inscriptions', function($q) use ($request) {
+        //         $q->where('classe_id', $request->classe_id)
+        //             ->where('statut', 'en_cours');
+        //     });
+        // }
 
         if ($request->has('search')) {
             $search = $request->search;
@@ -54,7 +54,7 @@ class EleveController extends Controller
 
         $eleves = $request->has('paginate') && $request->paginate == false
             ? $query->get()
-            : $query->paginate($request->per_page ?? 20);
+            : $query->paginate($request->per_page ?? 100);
 
         return response()->json([
             'success' => true,

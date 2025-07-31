@@ -144,22 +144,19 @@ class ParentController extends Controller
             ], 404);
         }
 
-        // Récupérer les notes détaillées de l'élève pour cette période ET cette classe seulement
+        // Récupérer les notes détaillées de l'élève pour cette période
         $notes = \App\Models\Note::where('eleve_id', $eleveId)
             ->where('periode_id', $trimestreId)
-            ->whereHas('matiere', function($query) use ($bulletin) {
-                $query->where('niveau_id', $bulletin->classe->niveau_id);
-            })
             ->with([
-                'matiere:id,nom,code,coefficient,niveau_id',
+                'matiere:id,nom,code,coefficient',
                 'enseignant.user:id,nom,prenom'
             ])
             ->get()
-            ->map(function ($note) use ($trimestreId, $bulletin) {
+            ->map(function ($note) {
                 return [
                     'matiere_nom' => $note->matiere->nom,
                     'matiere_code' => $note->matiere->code,
-                    'matiere_couleur' => '#3B82F6', // Couleur par défaut
+                   
                     'coefficient' => $note->matiere->coefficient,
                     'enseignant_nom' => $note->enseignant ? 
                         trim($note->enseignant->user->prenom . ' ' . $note->enseignant->user->nom) : 

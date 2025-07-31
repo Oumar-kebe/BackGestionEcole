@@ -382,13 +382,14 @@ class DashboardController extends Controller
 
         // Élèves en difficulté (moyenne < 8)
         $elevesEnDifficulte = DB::table('notes')
-            ->join('inscriptions', 'notes.eleve_id', '=', 'inscriptions.eleve_id')
-            ->where('inscriptions.annee_scolaire_id', $anneeCourante->id)
-            ->where('inscriptions.statut', 'en_cours')
-            ->select('notes.eleve_id', DB::raw('AVG(notes.note) as moyenne'))
-            ->groupBy('notes.eleve_id')
-            ->havingRaw('AVG(notes.note) < 8')
-            ->count();
+        ->join('inscriptions', 'notes.eleve_id', '=', 'inscriptions.eleve_id')
+        ->where('inscriptions.annee_scolaire_id', $anneeCourante->id)
+        ->where('inscriptions.statut', 'en_cours')
+        ->select('notes.eleve_id', DB::raw('AVG(notes.valeur) as moyenne')) // <-- ici
+        ->groupBy('notes.eleve_id')
+        ->havingRaw('AVG(notes.valeur) < 8') // <-- ici aussi
+        ->count();
+    
 
         return [
             'averageGeneral' => $moyenneGenerale ? round($moyenneGenerale, 2) : 'N/A',

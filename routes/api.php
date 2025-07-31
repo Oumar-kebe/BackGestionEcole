@@ -82,6 +82,7 @@ Route::middleware(['jwt.auth', 'active'])->group(function () {
         Route::post('matieres/{matiere}/toggle-status', [MatiereController::class, 'toggleStatus']);
         Route::get('matieres/{matiere}/enseignants', [MatiereController::class, 'enseignants']);
         Route::post('matieres/{matiere}/assigner-enseignant', [MatiereController::class, 'assignerEnseignant']);
+        Route::delete('matieres/{matiere}/detacher-enseignant', [MatiereController::class, 'detacherEnseignant']);
 
         // Gestion des élèves
         Route::apiResource('eleves', EleveController::class);
@@ -142,6 +143,7 @@ Route::middleware(['jwt.auth', 'active'])->group(function () {
         Route::get('enseignant/mon-emploi-temps', [EmploiTempsController::class, 'emploiSemaine']);
 
         // Saisie des notes
+        Route::get('notes', [NoteController::class, 'index']);
         Route::post('notes', [NoteController::class, 'store']);
         Route::put('notes/{note}', [NoteController::class, 'update']);
         Route::get('notes/saisie-par-classe', [NoteController::class, 'saisieParClasse']);

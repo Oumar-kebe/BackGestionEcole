@@ -117,7 +117,7 @@ class EnseignantController extends Controller
     {
         $enseignant = Enseignant::with([
             'user',
-            'matieres',
+            'matieres.niveau',
             'classes.niveau',
             'notes'
         ])->findOrFail($id);
