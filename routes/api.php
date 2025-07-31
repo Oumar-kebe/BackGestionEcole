@@ -51,6 +51,8 @@ Route::middleware(['jwt.auth', 'active'])->group(function () {
     // Routes de debug (temporaires)
     Route::get('debug/user-info', [DebugController::class, 'userInfo']);
     Route::get('debug/parent-enfants', [DebugController::class, 'parentEnfants']);
+    Route::apiResource('classes', ClasseController::class);
+    Route::apiResource('matieres', MatiereController::class);
 
     // Routes pour l'administrateur uniquement
     Route::middleware(['role:administrateur'])->group(function () {
@@ -71,14 +73,12 @@ Route::middleware(['jwt.auth', 'active'])->group(function () {
         Route::get('niveaux/{niveau}/classes', [NiveauController::class, 'classes']);
 
         // Gestion des classes
-        Route::apiResource('classes', ClasseController::class);
         Route::get('classes/{classe}/eleves', [ClasseController::class, 'eleves']);
         Route::get('classes/{classe}/enseignants', [ClasseController::class, 'enseignants']);
         Route::post('classes/{classe}/assigner-enseignant', [ClasseController::class, 'assignerEnseignant']);
         Route::post('classes/{classe}/retirer-enseignant', [ClasseController::class, 'retirerEnseignant']);
 
         // Gestion des matières
-        Route::apiResource('matieres', MatiereController::class);
         Route::post('matieres/{matiere}/toggle-status', [MatiereController::class, 'toggleStatus']);
         Route::get('matieres/{matiere}/enseignants', [MatiereController::class, 'enseignants']);
         Route::post('matieres/{matiere}/assigner-enseignant', [MatiereController::class, 'assignerEnseignant']);

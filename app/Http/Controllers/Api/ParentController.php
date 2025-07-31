@@ -6,9 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Models\ParentEleve;
 use App\Models\User;
 use App\Models\Eleve;
+use App\Models\Note;
+use App\Models\Bulletin;
+use App\Models\Periode;
+use App\Models\Classe;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 
 class ParentController extends Controller
 {
@@ -103,115 +108,250 @@ class ParentController extends Controller
 
     public function voirBulletin($eleveId, $trimestreId)
     {
-        $user = auth()->user();
-        
-        // Vérifier que l'utilisateur est bien un parent
-        if (!$user->isParent()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Accès non autorisé. Vous devez être un parent.'
-            ], 403);
-        }
+        try {
+            $user = auth()->user();
+            Log::info("🔍 Tentative de consultation de bulletin", [
+                'user_id' => $user->id,
+                'eleve_id' => $eleveId,
+                'trimestre_id' => $trimestreId
+            ]);
+            
+            // Vérifier que l'utilisateur est bien un parent
+            if (!$user->isParent()) {
+                Log::warning("❌ Accès refusé - utilisateur non parent", ['user_id' => $user->id]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Accès non autorisé. Vous devez être un parent.'
+                ], 403);
+            }
 
-        // Récupérer l'enregistrement parent
-        $parent = $user->parent; // Utiliser la bonne relation
+            // Récupérer l'enregistrement parent
+            $parent = $user->parent;
+            
+            if (!$parent) {
+                Log::error("❌ Aucun profil parent trouvé", ['user_id' => $user->id]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Aucun profil parent trouvé pour cet utilisateur.'
+                ], 404);
+            }
         
-        if (!$parent) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Aucun profil parent trouvé pour cet utilisateur.'
-            ], 404);
-        }
-    
-        $estSonEnfant = $parent->enfants()->where('eleves.id', $eleveId)->exists();
-    
-        if (!$estSonEnfant) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cet enfant ne vous appartient pas.'
-            ], 403);
-        }
-    
-        $bulletin = \App\Models\Bulletin::where('eleve_id', $eleveId)
-            ->where('periode_id', $trimestreId)
-            ->with(['classe.niveau', 'periode', 'eleve.user'])
-            ->first();
-    
-        if (!$bulletin) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Aucun bulletin trouvé pour cet élève et ce trimestre.'
-            ], 404);
-        }
+            $estSonEnfant = $parent->enfants()->where('eleves.id', $eleveId)->exists();
+        
+            if (!$estSonEnfant) {
+                Log::warning("❌ Tentative d'accès à un enfant non autorisé", [
+                    'parent_id' => $parent->id,
+                    'eleve_id' => $eleveId
+                ]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Cet enfant ne vous appartient pas.'
+                ], 403);
+            }
+        
+            $bulletin = Bulletin::where('eleve_id', $eleveId)
+                ->where('periode_id', $trimestreId)
+                ->with(['classe.niveau', 'periode', 'eleve.user'])
+                ->first();
+        
+            if (!$bulletin) {
+                Log::info("ℹ️ Bulletin non trouvé", [
+                    'eleve_id' => $eleveId,
+                    'periode_id' => $trimestreId
+                ]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Aucun bulletin trouvé pour cet élève et ce trimestre.'
+                ], 404);
+            }
 
-        // Récupérer les notes détaillées de l'élève pour cette période
-        $notes = \App\Models\Note::where('eleve_id', $eleveId)
-            ->where('periode_id', $trimestreId)
-            ->with([
-                'matiere:id,nom,code,coefficient',
-                'enseignant.user:id,nom,prenom'
-            ])
-            ->get()
-            ->map(function ($note) {
-                return [
-                    'matiere_nom' => $note->matiere->nom,
-                    'matiere_code' => $note->matiere->code,
-                   
-                    'coefficient' => $note->matiere->coefficient,
-                    'enseignant_nom' => $note->enseignant ? 
-                        trim($note->enseignant->user->prenom . ' ' . $note->enseignant->user->nom) : 
-                        'Non assigné',
-                    'note_devoir1' => $note->note_devoir1,
-                    'note_devoir2' => $note->note_devoir2,
-                    'note_composition' => $note->note_composition,
-                    'moyenne' => $note->moyenne,
-                    'appreciation' => $note->appreciation,
-                    'moyenne_classe' => $this->getMoyenneClasse($note->matiere_id, $trimestreId, $bulletin->classe_id)
+            // Récupérer la classe actuelle de l'élève pour cette période
+            $classeActuelle = $this->getClasseActuelleEleve($eleveId, $trimestreId);
+            
+            if (!$classeActuelle) {
+                Log::warning("⚠️ Classe actuelle non trouvée", [
+                    'eleve_id' => $eleveId,
+                    'periode_id' => $trimestreId
+                ]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Classe actuelle de l\'élève non trouvée pour cette période.'
+                ], 404);
+            }
+
+            Log::info("📚 Classe actuelle identifiée", [
+                'classe_id' => $classeActuelle->id,
+                'classe_nom' => $classeActuelle->nom
+            ]);
+
+            // Récupérer les notes détaillées UNIQUEMENT pour la classe actuelle
+            $notes = Note::where('eleve_id', $eleveId)
+                ->where('periode_id', $trimestreId)
+                ->whereHas('matiere', function($query) use ($classeActuelle) {
+                    // Filtrer les matières du même niveau que la classe actuelle
+                    $query->where('niveau_id', $classeActuelle->niveau_id);
+                })
+                ->with([
+                    'matiere:id,nom,code,coefficient,niveau_id',
+                    'enseignant.user:id,nom,prenom'
+                ])
+                ->get()
+                ->map(function ($note) use ($trimestreId, $classeActuelle) {
+                    return [
+                        'matiere_nom' => $note->matiere ? $note->matiere->nom : 'Matière inconnue',
+                        'matiere_code' => $note->matiere ? $note->matiere->code : 'XX',
+                        'coefficient' => $note->matiere ? $note->matiere->coefficient : 1,
+                        'enseignant_nom' => $note->enseignant && $note->enseignant->user ? 
+                            trim($note->enseignant->user->prenom . ' ' . $note->enseignant->user->nom) : 
+                            'Non assigné',
+                        'note_devoir1' => $note->note_devoir1,
+                        'note_devoir2' => $note->note_devoir2,
+                        'note_composition' => $note->note_composition,
+                        'moyenne' => $note->moyenne,
+                        'appreciation' => $note->appreciation,
+                        'moyenne_classe' => $this->getMoyenneClasse($note->matiere_id, $trimestreId, $classeActuelle->id),
+                        'classe_actuelle' => $classeActuelle->nom // Pour debug
+                    ];
+                });
+
+            Log::info("✅ Bulletin trouvé avec succès", [
+                'bulletin_id' => $bulletin->id,
+                'nombre_notes' => $notes->count()
+            ]);
+
+            // Enrichir les données du bulletin
+            $bulletinData = $bulletin->toArray();
+            $bulletinData['notes'] = $notes;
+            $bulletinData['trimestre'] = $bulletin->periode ? $bulletin->periode->nom : 'Trimestre ' . $trimestreId;
+            $bulletinData['appreciation_generale'] = $bulletin->observation_conseil;
+            $bulletinData['professeur_principal'] = $this->getProfesseurPrincipal($bulletin->classe_id);
+            $bulletinData['conseils'] = $this->getConseils($bulletin->moyenne_generale);
+            $bulletinData['evolution'] = $this->getEvolution($eleveId, $trimestreId);
+
+            return response()->json([
+                'success' => true,
+                'data' => $bulletinData
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error("❌ Erreur lors de la récupération du bulletin", [
+                'error' => $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile(),
+                'trace' => $e->getTraceAsString(),
+                'eleve_id' => $eleveId,
+                'trimestre_id' => $trimestreId
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Une erreur inattendue s\'est produite lors de la récupération du bulletin.'
+            ], 500);
+        }
+    }
+
+    private function getClasseActuelleEleve($eleveId, $periodeId)
+    {
+        try {
+            // Récupérer la période pour avoir l'année scolaire
+            $periode = Periode::find($periodeId);
+            if (!$periode) {
+                Log::warning("Période non trouvée", ['periode_id' => $periodeId]);
+                return null;
+            }
+
+            // Trouver l'inscription active de l'élève pour cette année scolaire
+            $inscription = DB::table('inscriptions')
+                ->join('classes', 'inscriptions.classe_id', '=', 'classes.id')
+                ->where('inscriptions.eleve_id', $eleveId)
+                ->where('inscriptions.annee_scolaire_id', $periode->annee_scolaire_id)
+                ->where('inscriptions.statut', 'confirmee')
+                ->select('classes.id', 'classes.nom', 'classes.niveau_id')
+                ->first();
+
+            if ($inscription) {
+                Log::info("✅ Inscription trouvée", [
+                    'classe_id' => $inscription->id,
+                    'classe_nom' => $inscription->nom,
+                    'niveau_id' => $inscription->niveau_id
+                ]);
+                
+                return (object) [
+                    'id' => $inscription->id,
+                    'nom' => $inscription->nom,
+                    'niveau_id' => $inscription->niveau_id
                 ];
-            });
+            }
 
-        // Enrichir les données du bulletin
-        $bulletinData = $bulletin->toArray();
-        $bulletinData['notes'] = $notes;
-        $bulletinData['trimestre'] = $bulletin->periode->nom ?? 'Trimestre ' . $trimestreId;
-        $bulletinData['appreciation_generale'] = $bulletin->observation_conseil;
-        $bulletinData['professeur_principal'] = $this->getProfesseurPrincipal($bulletin->classe_id);
-        $bulletinData['conseils'] = $this->getConseils($bulletin->moyenne_generale);
-        $bulletinData['evolution'] = $this->getEvolution($eleveId, $trimestreId);
-    
-        return response()->json([
-            'success' => true,
-            'data' => $bulletinData
-        ]);
+            Log::warning("Aucune inscription trouvée, essai via bulletin");
+
+            // Fallback : utiliser la classe du bulletin si disponible
+            $bulletin = Bulletin::where('eleve_id', $eleveId)
+                ->where('periode_id', $periodeId)
+                ->with('classe')
+                ->first();
+
+            if ($bulletin && $bulletin->classe) {
+                Log::info("✅ Classe trouvée via bulletin", [
+                    'classe_id' => $bulletin->classe->id,
+                    'classe_nom' => $bulletin->classe->nom
+                ]);
+                return $bulletin->classe;
+            }
+
+            Log::warning("❌ Aucune classe trouvée pour l'élève", [
+                'eleve_id' => $eleveId,
+                'periode_id' => $periodeId
+            ]);
+
+            return null;
+
+        } catch (\Exception $e) {
+            Log::error("❌ Erreur récupération classe actuelle", [
+                'eleve_id' => $eleveId,
+                'periode_id' => $periodeId,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
     }
 
     private function getMoyenneClasse($matiereId, $periodeId, $classeId)
     {
-        // Calculer la moyenne de la classe pour une matière donnée
-        $moyenneClasse = \App\Models\Note::whereHas('eleve.inscriptions', function($q) use ($classeId) {
-                $q->where('classe_id', $classeId)
-                  ->where('statut', 'confirmee');
-            })
-            ->where('matiere_id', $matiereId)
-            ->where('periode_id', $periodeId)
-            ->whereNotNull('moyenne')
-            ->avg('moyenne');
+        try {
+            // Calculer la moyenne de la classe pour une matière donnée
+            $moyenneClasse = Note::whereHas('eleve.inscriptions', function($q) use ($classeId) {
+                    $q->where('classe_id', $classeId)
+                      ->where('statut', 'confirmee');
+                })
+                ->where('matiere_id', $matiereId)
+                ->where('periode_id', $periodeId)
+                ->whereNotNull('moyenne')
+                ->avg('moyenne');
 
-        return $moyenneClasse ? round($moyenneClasse, 2) : null;
+            return $moyenneClasse ? round($moyenneClasse, 2) : null;
+        } catch (\Exception $e) {
+            Log::warning("Erreur calcul moyenne classe", ['error' => $e->getMessage()]);
+            return null;
+        }
     }
 
     private function getProfesseurPrincipal($classeId)
     {
-        // Récupérer le professeur principal de la classe
-        $classe = \App\Models\Classe::with(['enseignants.user'])
-            ->find($classeId);
-        
-        if ($classe && $classe->enseignants->isNotEmpty()) {
-            $principal = $classe->enseignants->first();
-            return trim($principal->user->prenom . ' ' . $principal->user->nom);
-        }
+        try {
+            // Récupérer le professeur principal de la classe
+            $classe = Classe::with(['enseignants.user'])->find($classeId);
+            
+            if ($classe && $classe->enseignants && $classe->enseignants->isNotEmpty()) {
+                $principal = $classe->enseignants->first();
+                return trim($principal->user->prenom . ' ' . $principal->user->nom);
+            }
 
-        return 'Non assigné';
+            return 'Non assigné';
+        } catch (\Exception $e) {
+            Log::warning("Erreur récupération professeur principal", ['error' => $e->getMessage()]);
+            return 'Non assigné';
+        }
     }
 
     private function getConseils($moyenne)
@@ -230,34 +370,36 @@ class ParentController extends Controller
 
     private function getEvolution($eleveId, $periodeId)
     {
-        // Calculer l'évolution par rapport à la période précédente
-        $periodeActuelle = \App\Models\Periode::find($periodeId);
-        if (!$periodeActuelle) return 0;
+        try {
+            // Calculer l'évolution par rapport à la période précédente
+            $periodeActuelle = Periode::find($periodeId);
+            if (!$periodeActuelle) return 0;
 
-        // Trouver la période précédente
-        $periodePrecedente = \App\Models\Periode::where('annee_scolaire_id', $periodeActuelle->annee_scolaire_id)
-            ->where('ordre', $periodeActuelle->ordre - 1)
-            ->first();
+            // Trouver la période précédente
+            $periodePrecedente = Periode::where('annee_scolaire_id', $periodeActuelle->annee_scolaire_id)
+                ->where('ordre', $periodeActuelle->ordre - 1)
+                ->first();
 
-        if (!$periodePrecedente) return 0;
+            if (!$periodePrecedente) return 0;
 
-        $bulletinActuel = \App\Models\Bulletin::where('eleve_id', $eleveId)
-            ->where('periode_id', $periodeId)
-            ->first();
+            $bulletinActuel = Bulletin::where('eleve_id', $eleveId)
+                ->where('periode_id', $periodeId)
+                ->first();
 
-        $bulletinPrecedent = \App\Models\Bulletin::where('eleve_id', $eleveId)
-            ->where('periode_id', $periodePrecedente->id)
-            ->first();
+            $bulletinPrecedent = Bulletin::where('eleve_id', $eleveId)
+                ->where('periode_id', $periodePrecedente->id)
+                ->first();
 
-        if ($bulletinActuel && $bulletinPrecedent) {
-            return round($bulletinActuel->moyenne_generale - $bulletinPrecedent->moyenne_generale, 2);
+            if ($bulletinActuel && $bulletinPrecedent) {
+                return round($bulletinActuel->moyenne_generale - $bulletinPrecedent->moyenne_generale, 2);
+            }
+
+            return 0;
+        } catch (\Exception $e) {
+            Log::warning("Erreur calcul évolution", ['error' => $e->getMessage()]);
+            return 0;
         }
-
-        return 0;
     }
-    
-    
-    
 
     public function update(Request $request, $id)
     {
@@ -309,33 +451,54 @@ class ParentController extends Controller
     // Méthodes pour le portail parent
     public function mesEnfants()
     {
-        $user = auth()->user();
-        
-        // Vérifier que l'utilisateur est bien un parent
-        if (!$user->isParent()) {
+        try {
+            $user = auth()->user();
+            Log::info("🔍 Récupération des enfants du parent", ['user_id' => $user->id]);
+            
+            // Vérifier que l'utilisateur est bien un parent
+            if (!$user->isParent()) {
+                Log::warning("❌ Accès refusé - utilisateur non parent", ['user_id' => $user->id]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Accès non autorisé. Vous devez être un parent.'
+                ], 403);
+            }
+
+            $parent = $user->parent; // Utiliser la bonne relation
+            
+            if (!$parent) {
+                Log::error("❌ Aucun profil parent trouvé", ['user_id' => $user->id]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Aucun profil parent trouvé pour cet utilisateur.'
+                ], 404);
+            }
+
+            $enfants = $parent->enfants()
+                ->with(['user', 'inscriptions.classe.niveau'])
+                ->get();
+
+            Log::info("✅ Enfants récupérés avec succès", [
+                'parent_id' => $parent->id,
+                'nombre_enfants' => $enfants->count()
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => $enfants
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error("❌ Erreur lors de la récupération des enfants", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return response()->json([
                 'success' => false,
-                'message' => 'Accès non autorisé. Vous devez être un parent.'
-            ], 403);
+                'message' => 'Une erreur inattendue s\'est produite lors de la récupération des enfants.'
+            ], 500);
         }
-
-        $parent = $user->parent; // Utiliser la bonne relation
-        
-        if (!$parent) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Aucun profil parent trouvé pour cet utilisateur.'
-            ], 404);
-        }
-
-        $enfants = $parent->enfants()
-            ->with(['user', 'inscriptions.classe.niveau'])
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data' => $enfants
-        ]);
     }
 
     public function bulletinEnfant($eleveId)
