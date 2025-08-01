@@ -47,14 +47,14 @@ class EnseignantController extends Controller
             'email' => 'required|email|unique:users',
             'telephone' => 'required|string',
             'adresse' => 'required|string',
-            'date_naissance' => 'required|date',
-            'lieu_naissance' => 'required|string',
-            'sexe' => 'required|in:M,F',
+            // 'date_naissance' => 'required|date',
+            // 'lieu_naissance' => 'required|string',
+            // 'sexe' => 'required|in:M,F',
             'specialite' => 'nullable|string',
             'diplome' => 'nullable|string',
             'annees_experience' => 'nullable|integer|min:0',
-            'matieres' => 'required|array',
-            'matieres.*' => 'exists:matieres,id'
+            // 'matieres' => 'required|array',
+            // 'matieres.*' => 'exists:matieres,id'
         ]);
 
         DB::beginTransaction();

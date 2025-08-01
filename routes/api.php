@@ -122,7 +122,7 @@ Route::middleware(['jwt.auth', 'active'])->group(function () {
 
         // Génération des bulletins
         Route::post('bulletins/generer', [BulletinController::class, 'generer']);
-        // Route::apiResource('admin/bulletins', BulletinController::class);
+        Route::apiResource('admin/bulletins', BulletinController::class);
 
         Route::post('bulletins/{bulletin}/observation-conseil', [BulletinController::class, 'observationConseil']);
         Route::get('bulletins/telecharger-groupe', [BulletinController::class, 'telechargerGroupe']);
